@@ -16,8 +16,8 @@ from openai.types.responses import (
     ResponseOutputMessage,
     ResponseOutputText,
     ResponseReasoningItem,
+    ResponseOutputItemDoneEvent
 )
-
 from agents.model_settings import ModelSettings
 from agents.models.interface import ModelTracing
 from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
@@ -135,12 +135,31 @@ async def test_stream_response_yields_events_for_reasoning_content(monkeypatch) 
         output_events.append(event)
 
     # verify reasoning content events were emitted
+    # Ensure reasoning summary part added and done events are present
+    reasoning_part_added_events = [
+        e for e in output_events if e.type == "response.reasoning_summary_part.added"
+    ]
+    assert len(reasoning_part_added_events) == 1
+
     reasoning_delta_events = [
         e for e in output_events if e.type == "response.reasoning_summary_text.delta"
     ]
     assert len(reasoning_delta_events) == 2
     assert reasoning_delta_events[0].delta == "Let me think"
     assert reasoning_delta_events[1].delta == " about this"
+
+    reasoning_part_done_events = [
+        e for e in output_events if e.type == "response.reasoning_summary_part.done"
+    ]
+    assert len(reasoning_part_done_events) == 1
+    assert reasoning_part_done_events[0].part.text == "Let me think about this"
+
+    reasoning_item_done_events = [
+        e
+        for e in output_events
+        if isinstance(e, ResponseOutputItemDoneEvent) and getattr(e.item, "type", None) == "reasoning"
+    ]
+    assert len(reasoning_item_done_events) == 1
 
     # verify regular content events were emitted
     content_delta_events = [e for e in output_events if e.type == "response.output_text.delta"]
