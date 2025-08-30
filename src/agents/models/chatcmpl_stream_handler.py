@@ -527,6 +527,38 @@ class ChatCmplStreamHandler:
 
         # include Reasoning item if it exists
         if state.reasoning_content_index_and_output:
+            # Emit "done" signals for reasoning before finalizing outputs
+            reasoning_item = state.reasoning_content_index_and_output[1]
+            # If we streamed reasoning summary content, close the summary part
+            if reasoning_item.summary and len(reasoning_item.summary) > 0:
+                yield ResponseReasoningSummaryPartDoneEvent(
+                    item_id=FAKE_RESPONSES_ID,
+                    output_index=0,
+                    summary_index=0,
+                    part=DoneEventPart(
+                        text=reasoning_item.summary[0].text,
+                        type="summary_text",
+                    ),
+                    type="response.reasoning_summary_part.done",
+                    sequence_number=sequence_number.get_and_increment(),
+                )
+            # If we streamed full reasoning text (3rd party path), close the text part
+            if reasoning_item.content and len(reasoning_item.content) > 0:
+                yield ResponseReasoningTextDoneEvent(
+                    content_index=0,
+                    item_id=FAKE_RESPONSES_ID,
+                    output_index=0,
+                    text=reasoning_item.content[0].text,
+                    type="response.reasoning_text.done",
+                    sequence_number=sequence_number.get_and_increment(),
+                )
+            # Mark the reasoning item as done
+            yield ResponseOutputItemDoneEvent(
+                item=reasoning_item,
+                output_index=0,
+                type="response.output_item.done",
+                sequence_number=sequence_number.get_and_increment(),
+            )
             outputs.append(state.reasoning_content_index_and_output[1])
 
         # include text or refusal content if they exist
