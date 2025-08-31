@@ -58,6 +58,7 @@ class StreamingState:
     text_content_index_and_output: tuple[int, ResponseOutputText] | None = None
     refusal_content_index_and_output: tuple[int, ResponseOutputRefusal] | None = None
     reasoning_content_index_and_output: tuple[int, ResponseReasoningItem] | None = None
+    assistant_output_index: int | None = None
     function_calls: dict[int, ResponseFunctionToolCall] = field(default_factory=dict)
     # Fields for real-time function call streaming
     function_call_streaming: dict[int, bool] = field(default_factory=dict)
@@ -197,46 +198,36 @@ class ChatCmplStreamHandler:
             # Handle regular content
             if delta.content is not None:
                 if not state.text_content_index_and_output:
-                    content_index = 0
-                    if state.reasoning_content_index_and_output:
-                        content_index += 1
-                    if state.refusal_content_index_and_output:
-                        content_index += 1
+                    # Determine assistant output index: 0 if no reasoning item, else 1
+                    if state.assistant_output_index is None:
+                        state.assistant_output_index = 1 if state.reasoning_content_index_and_output else 0
+                        # Start a new assistant message stream
+                        assistant_item = ResponseOutputMessage(
+                            id=FAKE_RESPONSES_ID,
+                            content=[],
+                            role="assistant",
+                            type="message",
+                            status="in_progress",
+                        )
+                        # Notify consumers of the start of a new output message
+                        yield ResponseOutputItemAddedEvent(
+                            item=assistant_item,
+                            output_index=state.assistant_output_index,
+                            type="response.output_item.added",
+                            sequence_number=sequence_number.get_and_increment(),
+                        )
 
+                    # First text part index is 0 unless a refusal part already exists
+                    content_index = 1 if state.refusal_content_index_and_output else 0
                     state.text_content_index_and_output = (
                         content_index,
-                        ResponseOutputText(
-                            text="",
-                            type="output_text",
-                            annotations=[],
-                        ),
-                    )
-                    # Start a new assistant message stream
-                    assistant_item = ResponseOutputMessage(
-                        id=FAKE_RESPONSES_ID,
-                        content=[],
-                        role="assistant",
-                        type="message",
-                        status="in_progress",
-                    )
-                    # Notify consumers of the start of a new output message + first content part
-                    yield ResponseOutputItemAddedEvent(
-                        item=assistant_item,
-                        output_index=state.reasoning_content_index_and_output
-                        is not None,  # fixed 0 -> 0 or 1
-                        type="response.output_item.added",
-                        sequence_number=sequence_number.get_and_increment(),
+                        ResponseOutputText(text="", type="output_text", annotations=[]),
                     )
                     yield ResponseContentPartAddedEvent(
-                        content_index=state.text_content_index_and_output[0],
+                        content_index=content_index,
                         item_id=FAKE_RESPONSES_ID,
-                        output_index=state.reasoning_content_index_and_output
-                        is not None,  # fixed 0 -> 0 or 1
-                        part=ResponseOutputText(
-                            text="",
-                            type="output_text",
-                            annotations=[],
-                        ),
+                        output_index=state.assistant_output_index,
+                        part=ResponseOutputText(text="", type="output_text", annotations=[]),
                         type="response.content_part.added",
                         sequence_number=sequence_number.get_and_increment(),
                     )
@@ -245,8 +236,7 @@ class ChatCmplStreamHandler:
                     content_index=state.text_content_index_and_output[0],
                     delta=delta.content,
                     item_id=FAKE_RESPONSES_ID,
-                    output_index=state.reasoning_content_index_and_output
-                    is not None,  # fixed 0 -> 0 or 1
+                    output_index=state.assistant_output_index,
                     type="response.output_text.delta",
                     sequence_number=sequence_number.get_and_increment(),
                     logprobs=[],
@@ -258,42 +248,33 @@ class ChatCmplStreamHandler:
             # This is always set by the OpenAI API, but not by others e.g. LiteLLM
             if hasattr(delta, "refusal") and delta.refusal:
                 if not state.refusal_content_index_and_output:
-                    refusal_index = 0
-                    if state.reasoning_content_index_and_output:
-                        refusal_index += 1
-                    if state.text_content_index_and_output:
-                        refusal_index += 1
+                    # Ensure assistant message exists
+                    if state.assistant_output_index is None:
+                        state.assistant_output_index = 1 if state.reasoning_content_index_and_output else 0
+                        assistant_item = ResponseOutputMessage(
+                            id=FAKE_RESPONSES_ID,
+                            content=[],
+                            role="assistant",
+                            type="message",
+                            status="in_progress",
+                        )
+                        yield ResponseOutputItemAddedEvent(
+                            item=assistant_item,
+                            output_index=state.assistant_output_index,
+                            type="response.output_item.added",
+                            sequence_number=sequence_number.get_and_increment(),
+                        )
 
+                    refusal_index = 1 if state.text_content_index_and_output else 0
                     state.refusal_content_index_and_output = (
                         refusal_index,
                         ResponseOutputRefusal(refusal="", type="refusal"),
                     )
-                    # Start a new assistant message if one doesn't exist yet (in-progress)
-                    assistant_item = ResponseOutputMessage(
-                        id=FAKE_RESPONSES_ID,
-                        content=[],
-                        role="assistant",
-                        type="message",
-                        status="in_progress",
-                    )
-                    # Notify downstream that assistant message + first content part are starting
-                    yield ResponseOutputItemAddedEvent(
-                        item=assistant_item,
-                        output_index=state.reasoning_content_index_and_output
-                        is not None,  # fixed 0 -> 0 or 1
-                        type="response.output_item.added",
-                        sequence_number=sequence_number.get_and_increment(),
-                    )
                     yield ResponseContentPartAddedEvent(
-                        content_index=state.refusal_content_index_and_output[0],
+                        content_index=refusal_index,
                         item_id=FAKE_RESPONSES_ID,
-                        output_index=state.reasoning_content_index_and_output
-                        is not None,  # fixed 0 -> 0 or 1
-                        part=ResponseOutputText(
-                            text="",
-                            type="output_text",
-                            annotations=[],
-                        ),
+                        output_index=state.assistant_output_index,
+                        part=ResponseOutputText(text="", type="output_text", annotations=[]),
                         type="response.content_part.added",
                         sequence_number=sequence_number.get_and_increment(),
                     )
@@ -302,8 +283,7 @@ class ChatCmplStreamHandler:
                     content_index=state.refusal_content_index_and_output[0],
                     delta=delta.refusal,
                     item_id=FAKE_RESPONSES_ID,
-                    output_index=state.reasoning_content_index_and_output
-                    is not None,  # fixed 0 -> 0 or 1
+                    output_index=state.assistant_output_index,
                     type="response.refusal.delta",
                     sequence_number=sequence_number.get_and_increment(),
                 )
@@ -426,31 +406,26 @@ class ChatCmplStreamHandler:
                 sequence_number=sequence_number.get_and_increment(),
             )
 
-        function_call_starting_index = 0
-        if state.reasoning_content_index_and_output:
-            function_call_starting_index += 1
-
-        if state.text_content_index_and_output:
+        # Calculate output index base for function calls: after reasoning and assistant message
+        function_call_starting_index = 1 if state.reasoning_content_index_and_output else 0
+        if state.text_content_index_and_output or state.refusal_content_index_and_output:
             function_call_starting_index += 1
             # Send end event for this content part
             yield ResponseContentPartDoneEvent(
                 content_index=state.text_content_index_and_output[0],
                 item_id=FAKE_RESPONSES_ID,
-                output_index=state.reasoning_content_index_and_output
-                is not None,  # fixed 0 -> 0 or 1
+                output_index=state.assistant_output_index,
                 part=state.text_content_index_and_output[1],
                 type="response.content_part.done",
                 sequence_number=sequence_number.get_and_increment(),
             )
 
         if state.refusal_content_index_and_output:
-            function_call_starting_index += 1
             # Send end event for this content part
             yield ResponseContentPartDoneEvent(
                 content_index=state.refusal_content_index_and_output[0],
                 item_id=FAKE_RESPONSES_ID,
-                output_index=state.reasoning_content_index_and_output
-                is not None,  # fixed 0 -> 0 or 1
+                output_index=state.assistant_output_index,
                 part=state.refusal_content_index_and_output[1],
                 type="response.content_part.done",
                 sequence_number=sequence_number.get_and_increment(),
@@ -579,8 +554,7 @@ class ChatCmplStreamHandler:
             # send a ResponseOutputItemDone for the assistant message
             yield ResponseOutputItemDoneEvent(
                 item=assistant_msg,
-                output_index=state.reasoning_content_index_and_output
-                is not None,  # fixed 0 -> 0 or 1
+                output_index=state.assistant_output_index,
                 type="response.output_item.done",
                 sequence_number=sequence_number.get_and_increment(),
             )
